@@ -1,0 +1,6 @@
+numpy
+scipy
+httpx
+pyyaml
+rich
+pytest

@@ -22,19 +22,21 @@ from __future__ import annotations
 import pickle
 from collections import deque
 from pathlib import Path
-from typing import Deque, Dict, List, Tuple
+from typing import Deque, Dict, Tuple
 
 import numpy as np
-from numpy.fft import rfft
+from scipy import signal
 
 
 # ─────────────────────────────────── constants
-WINDOW  = 128
-DECAY   = 0.98
-THRESH  = 0.85
-ALPHA   = 0.6
-BETA    = 0.4
-MAX_CRYSTALS = 64            # global cap to avoid runaway growth
+from mrce.settings import (
+    WINDOW,
+    DECAY,
+    THRESH,
+    ALPHA,
+    BETA,
+    MAX_CRYSTALS,
+)
 
 
 class PhaseCrystalMemory:
@@ -48,6 +50,9 @@ class PhaseCrystalMemory:
         self.scores:   Deque[float]      = deque(maxlen=WINDOW)
         self.crystals: Dict[str, np.ndarray] = {}          # cid -> vector
         self._counter = 0                                   # for crystal IDs
+        self.last_coherence = 0.0
+        self.last_dominant = 0.0
+        self.last_resonance = 0.0
 
     # ..................................................................
     @staticmethod
@@ -56,14 +61,15 @@ class PhaseCrystalMemory:
 
     # ..................................................................
     def local_coherence(self, emb: np.ndarray) -> float:
-        """Average cosine similarity vs. buffer (0 if buffer empty)."""
+        """Recency-weighted mean cosine similarity vs. buffer."""
         if not self.embeds:
             return 0.0
-        mat = np.stack(self.embeds)              # (N, d)
-        sims = mat @ emb / (
+        mat = np.stack(self.embeds)
+        sims = (mat @ emb) / (
             np.linalg.norm(mat, axis=1) * np.linalg.norm(emb) + 1e-9
         )
-        return float(sims.mean())
+        w = np.geomspace(1.0, 0.1, num=len(sims))
+        return float(np.average(sims, weights=w))
 
     # ..................................................................
     def dominant_frequency(self) -> float:
@@ -71,12 +77,11 @@ class PhaseCrystalMemory:
         Magnitude of the dominant non‑DC component of resonance score FFT.
         Interprets repeating coherence spikes as signal.
         """
-        if len(self.scores) < 8:                 # need minimum length
+        if len(self.scores) < 16:
             return 0.0
-        arr = np.asarray(self.scores, dtype="float32")
-        spec = np.abs(rfft(arr - arr.mean()))    # remove DC offset
-        # ignore DC (index 0) and take max of the rest
-        return float(spec[1:].max() / (len(arr) / 2))   # normalise
+        arr = np.asarray(self.scores, dtype="float32") - np.mean(self.scores)
+        f, Pxx = signal.welch(arr, nperseg=min(32, len(arr)))
+        return float(Pxx[1:].max() / (Pxx[1:].sum() + 1e-9))
 
     # ..................................................................
     def _next_cid(self) -> str:
@@ -84,7 +89,7 @@ class PhaseCrystalMemory:
         return f"C{self._counter:04d}"
 
     # ..................................................................
-    def add(self, emb: List[float] | np.ndarray) -> Tuple[str | None, float]:
+    def add(self, emb: list[float] | np.ndarray) -> Tuple[str | None, float]:
         """
         Add an embedding; return (promoted_cid or None, resonance_score).
         """
@@ -92,6 +97,9 @@ class PhaseCrystalMemory:
         coherence = self.local_coherence(emb_arr)
         dominant  = self.dominant_frequency()
         resonance = ALPHA * coherence + BETA * dominant
+        self.last_coherence = coherence
+        self.last_dominant = dominant
+        self.last_resonance = resonance
 
         # decay historical resonance
         self.scores = deque((s * DECAY for s in self.scores), maxlen=WINDOW)

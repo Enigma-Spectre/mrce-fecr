@@ -6,13 +6,19 @@ Usage:
     log_turn(timestamp, persona, prompt, reply)
 """
 
-import csv, os, datetime
+import csv
+import datetime
 from pathlib import Path
+import logging
+from rich.logging import RichHandler
 
-LOG_DIR = Path("logs")
+from mrce.settings import LOG_DIR, CSV_LOGGING
+
 LOG_DIR.mkdir(exist_ok=True)
 
-CSV_LOGGING = True   # ← toggle logging on/off globally
+logger = logging.getLogger("mrce")
+logger.setLevel(logging.INFO)
+logger.addHandler(RichHandler())
 
 # Determine next incremental file name
 existing = sorted(LOG_DIR.glob("MRCE_chat_*.csv"))
@@ -35,3 +41,21 @@ def log_turn(persona: str, prompt: str, response: str):
     ts = datetime.datetime.now().isoformat(timespec="seconds")
     with _log_path.open("a", newline="", encoding="utf-8") as f:
         csv.writer(f).writerow([ts, persona, prompt, response])
+
+
+def log_phi(turn: int, phi: list[float], resonance: float, coherence: float, spectral: float):
+    if not CSV_LOGGING:
+        return
+    path = LOG_DIR / "phi.csv"
+    header = not path.exists()
+    with path.open("a", newline="", encoding="utf-8") as f:
+        wr = csv.writer(f)
+        if header:
+            wr.writerow([
+                "turn",
+                "resonance",
+                "coherence",
+                "spectral",
+                *[f"phi_{i}" for i in range(len(phi))],
+            ])
+        wr.writerow([turn, resonance, coherence, spectral, *phi])

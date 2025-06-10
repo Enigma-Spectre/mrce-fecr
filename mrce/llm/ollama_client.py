@@ -62,7 +62,7 @@ async def chat(
 
 
 # ---------------------------------------------------------------- embed ---
-async def embed(text: str, model: str = "llama3:8b") -> List[float]:
+async def embed(text: str, model: str = "llama3:8b") -> list[float]:
     """
     Get an embedding vector. 120‑second timeout; on timeout returns [] so
     Phase‑Crystal logic can skip that turn instead of crashing.
@@ -74,7 +74,10 @@ async def embed(text: str, model: str = "llama3:8b") -> List[float]:
             r = await client.post(f"{OLLAMA_HOST}/api/embeddings", json=payload)
             r.raise_for_status()
             return r.json()["embedding"]
-        except (httpx.ReadTimeout, httpx.ConnectTimeout):
-            # log + return empty vector
+        except httpx.TimeoutException:
             print("[embed] timeout — skipping embedding for this turn")
             return []
+        except httpx.HTTPError as e:
+            print(f"[embed] http error: {e}")
+            return []
+
